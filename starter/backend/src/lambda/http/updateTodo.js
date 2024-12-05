@@ -1,5 +1,9 @@
 import { updateTodoItem } from '../../business/todos.mjs';
 import { getUserId } from '../utils.mjs';
+import { createLogger } from '../../utils/logger.mjs'
+
+const logger = createLogger('todos');
+
 export async function handler(event) {
   logger.info('Processing UpdateTodos request', { event });
   const todoId = event.pathParameters.todoId
