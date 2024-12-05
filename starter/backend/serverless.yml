@@ -1,16 +1,37 @@
+# "org" ensures this Service is used with the correct Serverless Framework Access Key.
+org: tungluu
+# "app" enables Serverless Framework Dashboard features and sharing them with other Services.
+app: serverless-todo-app
 service: serverless-todo-app
 
 plugins:
+  - serverless-reqvalidator-plugin
   - serverless-iam-roles-per-function
-
-frameworkVersion: '3'
 
 provider:
   name: aws
-  runtime: nodejs14.x
+  runtime: nodejs18.x
+  stage: ${opt:stage, 'dev'}
+  region: ${opt:region, 'us-east-1'}  
+  environment:
+    AUTH0_DOMAIN: dev-hdnoc2g25y0fa2tq.us.auth0.com
+    REGION: ${self:provider.region}
+    TODOS_TABLE: Todos-App-${self:provider.stage}
+    TODOS_CREATED_AT_INDEX: CreatedAtIndex
+    IMAGES_S3_BUCKET: todo-app-bucket-${self:provider.stage}
+    SIGNED_URL_EXPIRATION: 300
+    LOGGER_NAME: todos-app-serverless-todo-app  
+    
+  # Enable AWS X-Ray for distributed tracing
+  tracing:
+    lambda: true
+    apiGateway: true
+  logs:
+    restApi: true
+    websocket: true
+    httpApi: true
 
 functions:
-
   Auth:
     handler: src/lambda/auth/auth0Authorizer.handler
 
@@ -20,7 +41,32 @@ functions:
     events:
       - http:
           method: get
+          authorizer: Auth
           path: todos
+          cors: true
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:*
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.TODOS_TABLE}
+      - Effect: Allow
+        Action:
+          - dynamodb:*
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.TODOS_TABLE}/index/CreatedAtIndex
+      - Effect: Allow
+        Action:
+          - xray:*
+        Resource: '*'
+      - Effect: Allow
+        Action:
+          - apigateway:*
+        Resource: '*'
+      - Effect: Allow
+        Action:
+          - 's3:GetObject'
+        Resource:
+          - arn:aws:s3:::${self:provider.environment.IMAGES_S3_BUCKET}/*
+          - arn:aws:s3:::${self:provider.environment.IMAGES_S3_BUCKET}
 
   # TODO: Configure this function
   CreateTodo:
@@ -29,6 +75,24 @@ functions:
       - http:
           method: post
           path: todos
+          cors: true
+          authorizer: Auth
+          request:
+            schemas:
+              application/json: ${file(models/create-todo-request.json)}
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:*
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:table/${self:provider.environment.TODOS_TABLE}
+      - Effect: Allow
+        Action:
+          - xray:*
+        Resource: '*'
+      - Effect: Allow
+        Action:
+          - apigateway:*
+        Resource: '*'
 
   # TODO: Configure this function
   UpdateTodo:
@@ -37,6 +101,23 @@ functions:
       - http:
           method: patch
           path: todos/{todoId}
+          cors: true
+          authorizer: Auth
+          request:
+            schemas:
+              application/json: ${file(models/update-todo-request.json)}
+            parameters:
+              paths:
+                todoId: true
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:*
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:*
+      - Effect: Allow
+        Action:
+          - apigateway:*
+        Resource: '*'
 
   # TODO: Configure this function
   DeleteTodo:
@@ -45,6 +126,32 @@ functions:
       - http:
           method: delete
           path: todos/{todoId}
+          cors: true
+          authorizer: Auth
+          request:
+            parameters:
+              paths:
+                todoId: true
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:*
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:*
+      - Effect: Allow
+        Action:
+          - xray:*
+        Resource:
+          - '*'
+      - Effect: Allow
+        Action:
+          - apigateway:*
+        Resource: '*'
+      - Effect: Allow
+        Action:
+          - s3:*
+        Resource:
+          - arn:aws:s3:::${self:provider.environment.IMAGES_S3_BUCKET}/*
+          - arn:aws:s3:::${self:provider.environment.IMAGES_S3_BUCKET}
 
   # TODO: Configure this function
   GenerateUploadUrl:
@@ -53,7 +160,123 @@ functions:
       - http:
           method: post
           path: todos/{todoId}/attachment
+          cors: true
+          authorizer: Auth
+    iamRoleStatements:
+      - Effect: Allow
+        Action:
+          - dynamodb:*
+        Resource: arn:aws:dynamodb:${self:provider.region}:*:*
+      - Effect: Allow
+        Action:
+          - s3:*
+        Resource:
+          - arn:aws:s3:::${self:provider.environment.IMAGES_S3_BUCKET}/*
+          - arn:aws:s3:::${self:provider.environment.IMAGES_S3_BUCKET}
+      - Effect: Allow
+        Action:
+          - xray:*
+        Resource:
+          - '*'
+      - Effect: Allow
+        Action:
+          - apigateway:*
+        Resource: '*'
 
 resources:
   Resources:
-    # TODO: Add any necessary AWS resources
+    GatewayResponseDefault4XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS,POST,PUT,DELETE'"
+        ResponseType: DEFAULT_4XX
+        RestApiId:
+          Ref: ApiGatewayRestApi
+
+    GatewayResponseDefault5XX:
+      Type: AWS::ApiGateway::GatewayResponse
+      Properties:
+        ResponseParameters:
+          gatewayresponse.header.Access-Control-Allow-Origin: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Headers: "'*'"
+          gatewayresponse.header.Access-Control-Allow-Methods: "'GET,OPTIONS,POST,PUT,DELETE'"
+        ResponseType: DEFAULT_5XX
+        RestApiId:
+          Ref: ApiGatewayRestApi
+
+    TodoTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S # Required for the primary key
+          - AttributeName: todoId
+            AttributeType: S # Required for the primary key
+          - AttributeName: createdAt
+            AttributeType: S # Used in the LSI, not in the main key
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH # Primary partition key
+          - AttributeName: todoId
+            KeyType: RANGE # Primary sort key
+        BillingMode: PAY_PER_REQUEST
+        TableName: ${self:provider.environment.TODOS_TABLE}
+        LocalSecondaryIndexes:
+          - IndexName: ${self:provider.environment.TODOS_CREATED_AT_INDEX}
+            KeySchema:
+              - AttributeName: userId # Same HASH key as the main table
+                KeyType: HASH
+              - AttributeName: createdAt # Sort key for the index
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+
+    AttachmentsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: ${self:provider.environment.IMAGES_S3_BUCKET}
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: false
+          BlockPublicPolicy: false
+          RestrictPublicBuckets: false
+        CorsConfiguration:
+          CorsRules:
+            - AllowedOrigins:
+                - '*'
+              AllowedHeaders:
+                - '*'
+              AllowedMethods:
+                - GET
+                - PUT
+                - POST
+                - DELETE
+                - HEAD
+              MaxAge: 3000
+    BucketPolicy:
+      Type: AWS::S3::BucketPolicy
+      Properties:
+        PolicyDocument:
+          Id: NthPolicy
+          Version: '2012-10-17'
+          Statement:
+            - Sid: PublicReadForGetBucketObjects
+              Effect: Allow
+              Principal: '*'
+              Action:
+                - 's3:ListBucket'
+              Resource:
+                - 'arn:aws:s3:::${self:provider.environment.IMAGES_S3_BUCKET}/*'
+                - 'arn:aws:s3:::${self:provider.environment.IMAGES_S3_BUCKET}'
+            - Sid: AllowLambdaFunctionToPutObjects
+              Effect: Allow
+              Principal: '*'
+              Action:
+                - 's3:PutObject'
+                - 's3:GetObject'
+              Resource:
+                - 'arn:aws:s3:::${self:provider.environment.IMAGES_S3_BUCKET}/*'
+                - 'arn:aws:s3:::${self:provider.environment.IMAGES_S3_BUCKET}'
+        Bucket: !Ref AttachmentsBucket

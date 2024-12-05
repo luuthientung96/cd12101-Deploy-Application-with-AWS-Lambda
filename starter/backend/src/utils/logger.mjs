@@ -1,4 +1,4 @@
-import winston from 'winston'
+  import winston from 'winston'
 
 /**
  * Create a logger instance to write log messages in JSON format.
@@ -13,3 +13,7 @@ export function createLogger(loggerName) {
     transports: [new winston.transports.Console()]
   })
 }
+
+export default {
+  createLogger,
+};
